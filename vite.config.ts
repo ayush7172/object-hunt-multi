@@ -2,6 +2,9 @@ import { defineConfig } from 'vite';
 
 export default defineConfig({
   root: '.',
+  // GitHub Pages serves this repo from /object-hunt-multi/, so built asset URLs
+  // need that base path instead of the web root.
+  base: '/object-hunt-multi/',
   publicDir: 'public',
   build: {
     outDir: 'dist',
