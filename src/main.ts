@@ -106,6 +106,10 @@ class ObjectHuntGame {
       this.inputManager.onToggleView = () => this.playerController.toggleThirdPerson();
       this.inputManager.onPause = () => this.handlePause();
 
+      this.inputManager.onTouchLook = (dx, dy) => {
+        this.playerController.handleTouchLook(dx, dy);
+      };
+
       document.addEventListener('mousemove', (e) => {
         if (this.inputManager.isPointerLocked()) {
           this.playerController.handleMouseMove(e.movementX, e.movementY);

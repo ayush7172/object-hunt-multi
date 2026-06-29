@@ -60,8 +60,8 @@ export class MapLoader {
     this.buildBoundary(config);
   }
 
-  private mat(color: number): THREE.MeshLambertMaterial {
-    return new THREE.MeshLambertMaterial({ color });
+  private mat(color: number): THREE.MeshPhongMaterial {
+    return new THREE.MeshPhongMaterial({ color, shininess: 30 });
   }
 
   private addGround(size: number): void {

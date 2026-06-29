@@ -49,6 +49,10 @@ export class SceneManager {
     dirLight.shadow.bias = -0.0005;
     this.scene.add(dirLight);
 
+    const fill = new THREE.DirectionalLight(0x7799ff, 0.4);
+    fill.position.set(-15, 10, -10);
+    this.scene.add(fill);
+
     const hemi = new THREE.HemisphereLight(0x87CEEB, 0x362907, 0.3);
     this.scene.add(hemi);
   }
