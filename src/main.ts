@@ -76,68 +76,74 @@ class ObjectHuntGame {
     // Show loading
     this.ui.showLoading();
 
-    // Create canvas
-    this.canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
-    if (!this.canvas) {
-      this.canvas = document.createElement('canvas');
-      this.canvas.id = 'game-canvas';
-      document.body.prepend(this.canvas);
+    try {
+      // Create canvas
+      this.canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+      if (!this.canvas) {
+        this.canvas = document.createElement('canvas');
+        this.canvas.id = 'game-canvas';
+        document.body.prepend(this.canvas);
+      }
+
+      // Init systems
+      this.sceneManager = new SceneManager(this.canvas);
+      this.inputManager = new InputManager(this.canvas, this.ui.isMobileDevice());
+      this.mapLoader = new MapLoader(this.sceneManager.scene);
+      this.playerController = new PlayerController(this.sceneManager, this.inputManager);
+
+      // Init audio on first interaction
+      document.addEventListener('click', () => this.audio.init(), { once: true });
+      document.addEventListener('touchstart', () => this.audio.init(), { once: true });
+
+      // Setup input callbacks
+      this.inputManager.onInteract = () => this.handleInteract();
+      this.inputManager.onAttack = () => this.handleAttack();
+      this.inputManager.onJump = () => {}; // Handled in PlayerController.update
+      this.inputManager.onToggleView = () => this.playerController.toggleThirdPerson();
+      this.inputManager.onPause = () => this.handlePause();
+
+      document.addEventListener('mousemove', (e) => {
+        if (this.inputManager.isPointerLocked()) {
+          this.playerController.handleMouseMove(e.movementX, e.movementY);
+        }
+      });
+
+      // Setup network callbacks
+      this.network.onRoomStateChange = (state) => {
+        if (state) {
+          this.gameState.setRoomState(state);
+          this.localId = this.network.getLocalId();
+          this.gameState.setLocalPlayerId(this.localId);
+          this.handleRoomUpdate();
+        }
+      };
+
+      this.network.onGameEvent = (event) => this.handleGameEvent(event);
+      this.network.onConnected = (peerId) => this.handlePeerConnected(peerId);
+      this.network.onDisconnected = (peerId) => this.handlePeerDisconnected(peerId);
+      this.network.onError = (error) => this.ui.showMessage(error, '#f44336');
+
+      // Setup UI callbacks
+      this.ui.onCreateRoom = (settings) => this.createRoom(settings);
+      this.ui.onJoinRoom = (code) => this.joinRoom(code);
+      this.ui.onStartGame = () => this.startGame();
+      this.ui.onLeaveRoom = () => this.leaveRoom();
+
+      // Handle window resize
+      window.addEventListener('resize', () => this.sceneManager.resize());
+
+      // Show main menu
+      this.ui.hideLoading();
+      this.ui.showMainMenu();
+
+      // Start render loop
+      this.isRunning = true;
+      this.animate();
+    } catch (e) {
+      console.error('Game init failed:', e);
+      this.ui.hideLoading();
+      this.ui.showMessage(`Failed to load: ${e instanceof Error ? e.message : 'Unknown error'}`, '#f44336', 10000);
     }
-
-    // Init systems
-    this.sceneManager = new SceneManager(this.canvas);
-    this.inputManager = new InputManager(this.canvas, this.ui.isMobileDevice());
-    this.mapLoader = new MapLoader(this.sceneManager.scene);
-    this.playerController = new PlayerController(this.sceneManager, this.inputManager);
-
-    // Init audio on first interaction
-    document.addEventListener('click', () => this.audio.init(), { once: true });
-    document.addEventListener('touchstart', () => this.audio.init(), { once: true });
-
-    // Setup input callbacks
-    this.inputManager.onInteract = () => this.handleInteract();
-    this.inputManager.onAttack = () => this.handleAttack();
-    this.inputManager.onJump = () => {}; // Handled in PlayerController.update
-    this.inputManager.onToggleView = () => this.playerController.toggleThirdPerson();
-    this.inputManager.onPause = () => this.handlePause();
-
-    document.addEventListener('mousemove', (e) => {
-      if (this.inputManager.isPointerLocked()) {
-        this.playerController.handleMouseMove(e.movementX, e.movementY);
-      }
-    });
-
-    // Setup network callbacks
-    this.network.onRoomStateChange = (state) => {
-      if (state) {
-        this.gameState.setRoomState(state);
-        this.localId = this.network.getLocalId();
-        this.gameState.setLocalPlayerId(this.localId);
-        this.handleRoomUpdate();
-      }
-    };
-
-    this.network.onGameEvent = (event) => this.handleGameEvent(event);
-    this.network.onConnected = (peerId) => this.handlePeerConnected(peerId);
-    this.network.onDisconnected = (peerId) => this.handlePeerDisconnected(peerId);
-    this.network.onError = (error) => this.ui.showMessage(error, '#f44336');
-
-    // Setup UI callbacks
-    this.ui.onCreateRoom = (settings) => this.createRoom(settings);
-    this.ui.onJoinRoom = (code) => this.joinRoom(code);
-    this.ui.onStartGame = () => this.startGame();
-    this.ui.onLeaveRoom = () => this.leaveRoom();
-
-    // Handle window resize
-    window.addEventListener('resize', () => this.sceneManager.resize());
-
-    // Show main menu
-    this.ui.hideLoading();
-    this.ui.showMainMenu();
-
-    // Start render loop
-    this.isRunning = true;
-    this.animate();
   }
 
   // ========== ROOM MANAGEMENT ==========
