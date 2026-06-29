@@ -25,6 +25,10 @@ const FIREBASE_CONFIG = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID || "YOUR_APP_ID"
 };
 
+function isFirebaseConfigured(): boolean {
+  return FIREBASE_CONFIG.apiKey !== 'YOUR_API_KEY' && FIREBASE_CONFIG.projectId !== 'YOUR_PROJECT';
+}
+
 // ========== GAME CLASS ==========
 class ObjectHuntGame {
   // Core
@@ -136,6 +140,11 @@ class ObjectHuntGame {
       this.ui.hideLoading();
       this.ui.showMainMenu();
 
+      // Warn if Firebase not configured
+      if (!isFirebaseConfigured()) {
+        this.ui.showMessage('Firebase not configured — set GitHub Secrets in repo settings', '#FF9800', 10000);
+      }
+
       // Start render loop
       this.isRunning = true;
       this.animate();
@@ -148,6 +157,10 @@ class ObjectHuntGame {
 
   // ========== ROOM MANAGEMENT ==========
   private async createRoom(settings: RoomSettings): Promise<void> {
+    if (!isFirebaseConfigured()) {
+      this.ui.showMessage('Firebase not configured. Add secrets to GitHub repo settings.', '#f44336', 8000);
+      return;
+    }
     try {
       this.localId = await this.network.initialize(FIREBASE_CONFIG);
       const roomCode = await this.network.createRoom(settings);
@@ -158,6 +171,10 @@ class ObjectHuntGame {
   }
 
   private async joinRoom(code: string): Promise<void> {
+    if (!isFirebaseConfigured()) {
+      this.ui.showMessage('Firebase not configured. Add secrets to GitHub repo settings.', '#f44336', 8000);
+      return;
+    }
     try {
       this.localId = await this.network.initialize(FIREBASE_CONFIG);
       const success = await this.network.joinRoom(code);
