@@ -164,16 +164,99 @@ class ObjectHuntGame {
   }
 
   private async startGame(): Promise<void> {
-    if (!this.network.isHostPlayer()) return;
+    if (!this.network.isHostPlayer()) {
+      console.warn('Not host, cannot start game');
+      return;
+    }
 
+    console.log('Starting game...');
     const settings = this.gameState.getSettings();
     const playerCount = this.gameState.getPlayers().length;
     const mapConfig = getMapForPlayerCount(playerCount);
-
-    // Update map based on player count
     settings.mapId = mapConfig.id;
 
-    await this.network.startGame(settings);
+    try {
+      await this.network.startGame(settings);
+      console.log('Game start sent to Firebase');
+
+      // Host: also start locally without waiting for listener
+      // (listener should also trigger beginGameplay)
+      setTimeout(() => {
+        if (this.phase === 'lobby') {
+          console.log('Starting gameplay locally (fallback)');
+          this.phase = 'hiding';
+          this.beginGameplay(settings.mapId);
+        }
+      }, 1000);
+    } catch (e: any) {
+      console.error('Failed to start game:', e);
+      this.ui.showMessage(`Failed: ${e.message}`, '#f44336');
+    }
+  }
+
+  private beginGameplay(mapId: string): void {
+    // Load the map
+    const mapConfig = getMapById(mapId);
+    this.mapLoader.loadMap(mapConfig);
+
+    // Setup map loader's ground meshes for the scene manager
+    // (MapLoader already adds to scene)
+
+    // Position local player at first hider spawn
+    const spawns = mapConfig.spawnZones.hider;
+    const spawn = spawns[0] || { x: 0, y: 1.6, z: 0 };
+    this.playerController.spawn(
+      new THREE.Vector3(spawn.x, 1.6, spawn.z),
+      0
+    );
+
+    // Load transformable objects from map into game state
+    const objects = this.mapLoader.getTransformableObjects();
+    this.gameState.transformableObjects.clear();
+
+    // Find all transformable objects in the map
+    const worldGroup = this.mapLoader.getWorldGroup();
+    worldGroup.traverse((child) => {
+      if (child instanceof THREE.Group && child.userData.transformable) {
+        this.gameState.transformableObjects.set(child.userData.name, {
+          id: child.userData.name,
+          name: child.userData.name,
+          position: { x: child.position.x, y: child.position.y, z: child.position.z },
+          rotation: { x: child.rotation.x, y: child.rotation.y, z: child.rotation.z },
+          scale: { x: 1, y: 1, z: 1 },
+          durability: 100,
+          maxDurability: 100,
+          isTransformable: true,
+          hasHider: false,
+        });
+      }
+    });
+
+    // Show HUD
+    this.ui.showHUD();
+    this.ui.updateHUDMode(this.localRole as 'hide' | 'seek');
+
+    // Determine phase
+    const localPlayer = this.gameState.getLocalPlayer();
+    if (localPlayer) {
+      this.localRole = localPlayer.role;
+      this.playerHealth = localPlayer.health;
+      this.ui.updateHUDMode(localPlayer.role === 'seeker' ? 'seek' : 'hide');
+    }
+
+    // Start hiding phase
+    this.phase = 'hiding';
+    this.gameState.updatePhase('hiding', this.gameState.getSettings().hidingTime);
+    this.ui.updatePhase('hiding');
+
+    // Seekers get frozen during hiding phase
+    if (this.localRole === 'seeker') {
+      this.ui.showMessage('Hiders are hiding...', '#FF9800', 5000);
+    } else {
+      this.ui.showMessage('Find a hiding spot! Press E on objects to disguise!', '#4CAF50', 5000);
+    }
+
+    this.isRunning = true;
   }
 
   private async leaveRoom(): Promise<void> {
@@ -192,8 +275,19 @@ class ObjectHuntGame {
     const isHost = this.network.isHostPlayer();
     const roomId = this.network.getRoomId();
 
-    // Update lobby
-    this.ui.showLobby(roomId, players, isHost);
+    // Check if game just started (phase changed from lobby)
+    const newPhase = state.phase;
+    if (newPhase === 'hiding' && this.phase === 'lobby') {
+      // Game is starting!
+      this.phase = 'hiding';
+      this.beginGameplay(state.settings.mapId);
+      return;
+    }
+
+    // Still in lobby
+    if (newPhase === 'lobby') {
+      this.ui.showLobby(roomId, players, isHost, state.settings.maxPlayers);
+    }
 
     // Update roles
     const localPlayer = this.gameState.getLocalPlayer();

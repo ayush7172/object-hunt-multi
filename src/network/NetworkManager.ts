@@ -373,10 +373,33 @@ export class NetworkManager {
     await updateDoc(roomRef, state);
   }
 
-  async startGame(_settings: RoomSettings): Promise<void> {
-    if (!this.isHost) return;
+  async startGame(settings: RoomSettings): Promise<void> {
+    if (!this.isHost || !this.db) return;
+
+    // Update room state to start the game
+    const roomRef = doc(this.db, 'rooms', this.roomId);
     
-    // Game start is handled via room state update
+    // Assign roles - 1 seeker per 4 players (minimum 1)
+    const roomSnap = await getDoc(roomRef);
+    const roomState = roomSnap.data() as RoomState;
+    const playerIds = Object.keys(roomState.players);
+    const numSeekers = Math.max(1, Math.floor(playerIds.length / 4));
+    const shuffled = [...playerIds].sort(() => Math.random() - 0.5);
+    
+    const updates: Record<string, any> = {
+      phase: 'hiding',
+      phaseTimer: settings.hidingTime,
+      gameTimer: settings.seekingTime,
+      settings: settings,
+    };
+
+    playerIds.forEach((id, index) => {
+      updates[`players.${id}.role`] = index < numSeekers ? 'seeker' : 'hider';
+      updates[`players.${id}.isAlive`] = true;
+      updates[`players.${id}.health`] = 100;
+    });
+
+    await updateDoc(roomRef, updates);
   }
 
   private generateRoomCode(): string {

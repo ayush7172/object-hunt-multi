@@ -71,22 +71,68 @@ export class UIManager {
     this.setupMenuListeners();
   }
 
-  showLobby(roomCode: string, players: PlayerState[], isHost: boolean): void {
-    this.hideAll();
-    const el = this.get('lobby');
-    if (el) el.style.display = 'flex';
+  showLobby(roomCode: string, players: PlayerState[], isHost: boolean, maxPlayers: number = 10): void {
+    const lobby = document.getElementById('lobby');
+    const isAlreadyShowing = lobby && lobby.style.display === 'flex';
+
+    if (!isAlreadyShowing) {
+      this.hideAll();
+      if (lobby) lobby.style.display = 'flex';
+    }
 
     const codeEl = this.get('room-code-display');
     if (codeEl) codeEl.textContent = roomCode;
 
     const countEl = this.get('player-count');
-    if (countEl) countEl.textContent = `${players.length} / ${isHost ? '10' : players.length + ' joined'}`;
+    if (countEl) countEl.textContent = `${players.length} / ${maxPlayers}`;
 
     this.updatePlayerList(players);
 
-    // Show/hide host controls
-    const settingsPanel = this.get('settings-panel');
-    if (settingsPanel) settingsPanel.style.display = isHost ? 'block' : 'none';
+    const startBtn = document.getElementById('btn-start-game');
+    if (startBtn) startBtn.style.display = isHost ? 'block' : 'none';
+
+    // Only attach listeners once
+    if (!this._lobbyListenersAttached) {
+      this._lobbyListenersAttached = true;
+      this.attachLobbyListeners();
+    }
+  }
+
+  private _lobbyListenersAttached = false;
+
+  private attachLobbyListeners(): void {
+    const startBtn = document.getElementById('btn-start-game');
+    const leaveBtn = document.getElementById('btn-leave-room');
+    const readyBtn = document.getElementById('btn-ready');
+    const codeEl = document.getElementById('room-code-display');
+
+    if (startBtn) {
+      startBtn.onclick = () => {
+        this.onStartGame?.();
+      };
+    }
+
+    if (leaveBtn) {
+      leaveBtn.onclick = () => {
+        this._lobbyListenersAttached = false;
+        this.onLeaveRoom?.();
+      };
+    }
+
+    if (readyBtn) {
+      readyBtn.onclick = () => {
+        this.onReady?.();
+      };
+    }
+
+    if (codeEl) {
+      codeEl.onclick = () => {
+        const code = codeEl.textContent || '';
+        navigator.clipboard.writeText(code).then(() => {
+          this.showMessage('Room code copied!', '#4CAF50', 1500);
+        }).catch(() => {});
+      };
+    }
   }
 
   showHUD(): void {
@@ -289,31 +335,18 @@ export class UIManager {
   private setupMenuListeners(): void {
     const createBtn = document.getElementById('btn-create-room');
     const joinBtn = document.getElementById('btn-join-room');
-    const startBtn = document.getElementById('btn-start-game');
-    const leaveBtn = document.getElementById('btn-leave-room');
-    const readyBtn = document.getElementById('btn-ready');
 
-    createBtn?.addEventListener('click', () => {
-      this.showCreateRoomPanel();
-    });
+    if (createBtn) {
+      createBtn.onclick = () => {
+        this.showCreateRoomPanel();
+      };
+    }
 
-    joinBtn?.addEventListener('click', () => {
-      this.showJoinRoomPanel();
-    });
-
-    startBtn?.addEventListener('click', () => {
-      const settings = this.getHostSettings();
-      this.onCreateRoom?.(settings);
-    });
-
-    leaveBtn?.addEventListener('click', () => {
-      this.onLeaveRoom?.();
-      this.showMainMenu();
-    });
-
-    readyBtn?.addEventListener('click', () => {
-      this.onReady?.();
-    });
+    if (joinBtn) {
+      joinBtn.onclick = () => {
+        this.showJoinRoomPanel();
+      };
+    }
   }
 
   private showCreateRoomPanel(): void {
@@ -321,11 +354,14 @@ export class UIManager {
     if (panel) panel.style.display = 'flex';
 
     const confirmBtn = document.getElementById('btn-confirm-create');
-    confirmBtn?.addEventListener('click', () => {
-      const settings = this.getHostSettings();
-      this.onCreateRoom?.(settings);
-      if (panel) panel.style.display = 'none';
-    }, { once: true });
+    if (confirmBtn) {
+      confirmBtn.onclick = () => {
+        const settings = this.getHostSettings();
+        this.onCreateRoom?.(settings);
+        if (panel) panel.style.display = 'none';
+        confirmBtn.onclick = null;
+      };
+    }
   }
 
   private showJoinRoomPanel(): void {
@@ -333,14 +369,17 @@ export class UIManager {
     if (panel) panel.style.display = 'flex';
 
     const joinBtn = document.getElementById('btn-confirm-join');
-    joinBtn?.addEventListener('click', () => {
-      const input = this.get('room-code-input') as HTMLInputElement;
-      const code = input?.value?.toUpperCase().trim();
-      if (code && code.length >= 4) {
-        this.onJoinRoom?.(code);
-        if (panel) panel.style.display = 'none';
-      }
-    }, { once: true });
+    if (joinBtn) {
+      joinBtn.onclick = () => {
+        const input = this.get('room-code-input') as HTMLInputElement;
+        const code = input?.value?.toUpperCase().trim();
+        if (code && code.length >= 4) {
+          this.onJoinRoom?.(code);
+          if (panel) panel.style.display = 'none';
+          joinBtn.onclick = null;
+        }
+      };
+    }
   }
 
   private getHostSettings(): RoomSettings {

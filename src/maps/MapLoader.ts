@@ -494,4 +494,14 @@ export class MapLoader {
   getWorldGroup(): THREE.Group {
     return this.worldObjects;
   }
+
+  getTransformableObjects(): THREE.Group[] {
+    const objects: THREE.Group[] = [];
+    this.worldObjects.traverse((child) => {
+      if (child instanceof THREE.Group && child.userData.transformable) {
+        objects.push(child);
+      }
+    });
+    return objects;
+  }
 }
