@@ -1,5 +1,3 @@
-// Main Entry - Object Hunt Multiplayer
-
 import * as THREE from 'three';
 import { SceneManager } from './scene/SceneManager';
 import { PlayerController } from './player/PlayerController';
@@ -10,11 +8,9 @@ import { NetworkManager } from './network/NetworkManager';
 import { AudioManager } from './audio/AudioManager';
 import { UIManager } from './ui/UIManager';
 import { MapLoader } from './maps/MapLoader';
-import { getMapForPlayerCount, getMapById } from './maps/MapConfig';
-import { RoomSettings, PlayerState, GameEvent, GamePhase } from './utils/types';
+import { getMapById } from './maps/MapConfig';
+import { RoomSettings, PlayerState, GameEvent, GamePhase, RoomState } from './utils/types';
 
-// ========== FIREBASE CONFIG ==========
-// Uses Vite environment variables (set in .env or GitHub Secrets)
 const FIREBASE_CONFIG = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "YOUR_API_KEY",
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "YOUR_PROJECT.firebaseapp.com",
@@ -29,9 +25,12 @@ function isFirebaseConfigured(): boolean {
   return FIREBASE_CONFIG.apiKey !== 'YOUR_API_KEY' && FIREBASE_CONFIG.projectId !== 'YOUR_PROJECT';
 }
 
-// ========== GAME CLASS ==========
+interface ReplicaInfo {
+  mesh: THREE.Object3D;
+  timer: number;
+}
+
 class ObjectHuntGame {
-  // Core
   private canvas!: HTMLCanvasElement;
   private sceneManager!: SceneManager;
   private playerController!: PlayerController;
@@ -42,17 +41,13 @@ class ObjectHuntGame {
   private ui: UIManager;
   private mapLoader!: MapLoader;
 
-  // Remote players
   private remotePlayers: Map<string, RemotePlayer> = new Map();
 
-  // Game state
   private isRunning = false;
   private isPaused = false;
   private localId = '';
   private phase: GamePhase = 'lobby';
   private phaseTimer = 0;
-  private gameTimer = 0;
-  private objectTimer = 0;
   private objectTimerMax = 15;
   private isTransformed = false;
   private transformedObjectId = '';
@@ -60,14 +55,16 @@ class ObjectHuntGame {
   private playerHealth = 100;
   private localRole: 'hider' | 'seeker' | 'spectator' = 'hider';
 
-  // Weapon
-  private weaponMesh: THREE.Group | null = null;
-  private weaponSwing = 0;
+  private replicas: ReplicaInfo[] = [];
+  private replicaCount = 0;
+  private replicaLimit = 3;
+  private replicaDuration = 10;
 
-  // Position sync
+  private weaponSwing = 0;
   private syncInterval: ReturnType<typeof setInterval> | null = null;
   private lastSyncTime = 0;
-  private syncRate = 1000 / 20; // 20 Hz position sync
+  private syncRate = 1000 / 20;
+  private roleCardShown = false;
 
   constructor() {
     this.gameState = new GameStateManager();
@@ -77,11 +74,9 @@ class ObjectHuntGame {
   }
 
   async init(): Promise<void> {
-    // Show loading
     this.ui.showLoading();
 
     try {
-      // Create canvas
       this.canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
       if (!this.canvas) {
         this.canvas = document.createElement('canvas');
@@ -89,23 +84,20 @@ class ObjectHuntGame {
         document.body.prepend(this.canvas);
       }
 
-      // Init systems
       this.sceneManager = new SceneManager(this.canvas);
       this.inputManager = new InputManager(this.canvas, this.ui.isMobileDevice());
       this.mapLoader = new MapLoader(this.sceneManager.scene);
       this.playerController = new PlayerController(this.sceneManager, this.inputManager);
 
-      // Init audio on first interaction
       document.addEventListener('click', () => this.audio.init(), { once: true });
       document.addEventListener('touchstart', () => this.audio.init(), { once: true });
 
-      // Setup input callbacks
       this.inputManager.onInteract = () => this.handleInteract();
       this.inputManager.onAttack = () => this.handleAttack();
-      this.inputManager.onJump = () => {}; // Handled in PlayerController.update
+      this.inputManager.onJump = () => {};
       this.inputManager.onToggleView = () => this.playerController.toggleThirdPerson();
       this.inputManager.onPause = () => this.handlePause();
-
+      this.inputManager.onReplicate = () => this.handleReplicate();
       this.inputManager.onTouchLook = (dx, dy) => {
         this.playerController.handleTouchLook(dx, dy);
       };
@@ -116,13 +108,12 @@ class ObjectHuntGame {
         }
       });
 
-      // Setup network callbacks
       this.network.onRoomStateChange = (state) => {
         if (state) {
           this.gameState.setRoomState(state);
           this.localId = this.network.getLocalId();
           this.gameState.setLocalPlayerId(this.localId);
-          this.handleRoomUpdate();
+          this.handleRoomUpdate(state);
         }
       };
 
@@ -131,25 +122,20 @@ class ObjectHuntGame {
       this.network.onDisconnected = (peerId) => this.handlePeerDisconnected(peerId);
       this.network.onError = (error) => this.ui.showMessage(error, '#f44336');
 
-      // Setup UI callbacks
       this.ui.onCreateRoom = (settings) => this.createRoom(settings);
       this.ui.onJoinRoom = (code) => this.joinRoom(code);
       this.ui.onStartGame = () => this.startGame();
       this.ui.onLeaveRoom = () => this.leaveRoom();
 
-      // Handle window resize
       window.addEventListener('resize', () => this.sceneManager.resize());
 
-      // Show main menu
       this.ui.hideLoading();
       this.ui.showMainMenu();
 
-      // Warn if Firebase not configured
       if (!isFirebaseConfigured()) {
         this.ui.showMessage('Firebase not configured — set GitHub Secrets in repo settings', '#FF9800', 10000);
       }
 
-      // Start render loop
       this.isRunning = true;
       this.animate();
     } catch (e) {
@@ -159,7 +145,6 @@ class ObjectHuntGame {
     }
   }
 
-  // ========== ROOM MANAGEMENT ==========
   private async createRoom(settings: RoomSettings): Promise<void> {
     if (!isFirebaseConfigured()) {
       this.ui.showMessage('Firebase not configured. Add secrets to GitHub repo settings.', '#f44336', 8000);
@@ -168,6 +153,9 @@ class ObjectHuntGame {
     try {
       this.localId = await this.network.initialize(FIREBASE_CONFIG);
       const roomCode = await this.network.createRoom(settings);
+      this.replicaLimit = settings.replicaLimit;
+      this.replicaDuration = settings.replicaDuration;
+      this.objectTimerMax = settings.objectTime;
       this.ui.showLobby(roomCode, [], true);
     } catch (e: any) {
       this.ui.showMessage(`Failed to create room: ${e.message}`, '#f44336');
@@ -198,16 +186,11 @@ class ObjectHuntGame {
 
     console.log('Starting game...');
     const settings = this.gameState.getSettings();
-    const playerCount = this.gameState.getPlayers().length;
-    const mapConfig = getMapForPlayerCount(playerCount);
-    settings.mapId = mapConfig.id;
 
     try {
       await this.network.startGame(settings);
-      console.log('Game start sent to Firebase');
+      console.log('Game start sent to Firebase, settings:', settings);
 
-      // Host: also start locally without waiting for listener
-      // (listener should also trigger beginGameplay)
       setTimeout(() => {
         if (this.phase === 'lobby') {
           console.log('Starting gameplay locally (fallback)');
@@ -222,29 +205,22 @@ class ObjectHuntGame {
   }
 
   private beginGameplay(mapId: string): void {
-    // Load the map
+    const settings = this.gameState.getSettings();
+
+    this.objectTimerMax = settings.objectTime;
+    this.replicaLimit = settings.replicaLimit;
+    this.replicaDuration = settings.replicaDuration;
+
     const mapConfig = getMapById(mapId);
     this.mapLoader.loadMap(mapConfig);
 
-    // Setup map loader's ground meshes for the scene manager
-    // (MapLoader already adds to scene)
-
-    // Position local player at first hider spawn
     const spawns = mapConfig.spawnZones.hider;
     const spawn = spawns[0] || { x: 0, y: 1.6, z: 0 };
-    this.playerController.spawn(
-      new THREE.Vector3(spawn.x, 1.6, spawn.z),
-      0
-    );
+    this.playerController.spawn(new THREE.Vector3(spawn.x, 1.6, spawn.z), 0);
 
-    // Load transformable objects from map into game state
-    const objects = this.mapLoader.getTransformableObjects();
-    this.gameState.transformableObjects.clear();
-
-    // Find all transformable objects in the map
     const worldGroup = this.mapLoader.getWorldGroup();
     worldGroup.traverse((child) => {
-      if (child instanceof THREE.Group && child.userData.transformable) {
+      if (child instanceof THREE.Mesh && child.userData.transformable) {
         this.gameState.transformableObjects.set(child.userData.name, {
           id: child.userData.name,
           name: child.userData.name,
@@ -259,11 +235,9 @@ class ObjectHuntGame {
       }
     });
 
-    // Show HUD
     this.ui.showHUD();
     this.ui.updateHUDMode(this.localRole as 'hide' | 'seek');
 
-    // Determine phase
     const localPlayer = this.gameState.getLocalPlayer();
     if (localPlayer) {
       this.localRole = localPlayer.role;
@@ -271,12 +245,12 @@ class ObjectHuntGame {
       this.ui.updateHUDMode(localPlayer.role === 'seeker' ? 'seek' : 'hide');
     }
 
-    // Start hiding phase
     this.phase = 'hiding';
-    this.gameState.updatePhase('hiding', this.gameState.getSettings().hidingTime);
+    this.gameState.updatePhase('hiding', settings.hidingTime);
     this.ui.updatePhase('hiding');
 
-    // Seekers get frozen during hiding phase
+    this.roleCardShown = false;
+
     if (this.localRole === 'seeker') {
       this.ui.showMessage('Hiders are hiding...', '#FF9800', 5000);
     } else {
@@ -290,39 +264,36 @@ class ObjectHuntGame {
     await this.network.leaveRoom();
     this.remotePlayers.forEach(rp => rp.dispose(this.sceneManager.scene));
     this.remotePlayers.clear();
+    this.cleanupReplicas();
     this.ui.showMainMenu();
   }
 
-  // ========== GAME FLOW ==========
-  private handleRoomUpdate(): void {
-    const state = this.gameState.roomState;
-    if (!state) return;
-
+  private handleRoomUpdate(state: RoomState): void {
     const players = this.gameState.getPlayers();
     const isHost = this.network.isHostPlayer();
     const roomId = this.network.getRoomId();
 
-    // Check if game just started (phase changed from lobby)
+    const settings = state.settings;
+    this.replicaLimit = settings.replicaLimit;
+    this.replicaDuration = settings.replicaDuration;
+    this.objectTimerMax = settings.objectTime;
+
     const newPhase = state.phase;
     if (newPhase === 'hiding' && this.phase === 'lobby') {
-      // Game is starting!
       this.phase = 'hiding';
       this.beginGameplay(state.settings.mapId);
       return;
     }
 
-    // Still in lobby
     if (newPhase === 'lobby') {
       this.ui.showLobby(roomId, players, isHost, state.settings.maxPlayers);
     }
 
-    // Update roles
     const localPlayer = this.gameState.getLocalPlayer();
     if (localPlayer) {
       this.localRole = localPlayer.role;
     }
 
-    // Sync remote players
     this.syncRemotePlayers(players);
   }
 
@@ -330,7 +301,6 @@ class ObjectHuntGame {
     const existingIds = new Set(this.remotePlayers.keys());
     const newIds = new Set(players.map(p => p.id).filter(id => id !== this.localId));
 
-    // Remove disconnected players
     existingIds.forEach(id => {
       if (!newIds.has(id)) {
         const rp = this.remotePlayers.get(id);
@@ -339,7 +309,6 @@ class ObjectHuntGame {
       }
     });
 
-    // Add new players
     newIds.forEach(id => {
       if (!this.remotePlayers.has(id)) {
         const player = players.find(p => p.id === id);
@@ -374,6 +343,9 @@ class ObjectHuntGame {
       case 'playerDeath':
         this.handlePlayerDeath(event.payload);
         break;
+      case 'replicate':
+        this.handleRemoteReplicate(event.payload);
+        break;
     }
   }
 
@@ -395,14 +367,12 @@ class ObjectHuntGame {
 
   private handleRemoteHit(payload: any): void {
     this.audio.play('hit_wood');
-    // Flash effect on the object
     if (payload.destroyed) {
       this.audio.play('hit_metal');
     }
   }
 
   private handleRemoteDestroy(payload: any): void {
-    // Object destroyed animation
     this.audio.play('hit_metal');
   }
 
@@ -440,6 +410,17 @@ class ObjectHuntGame {
     }
   }
 
+  private handleRemoteReplicate(payload: any): void {
+    // Other players see the replica appear
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(payload.scale, payload.scale, payload.scale),
+      new THREE.MeshStandardMaterial({ color: payload.color })
+    );
+    m.position.set(payload.x, payload.y, payload.z);
+    this.sceneManager.scene.add(m);
+    setTimeout(() => this.sceneManager.scene.remove(m), this.replicaDuration * 1000);
+  }
+
   private handleGameOver(winner: 'hiders' | 'seekers'): void {
     this.isRunning = false;
     this.phase = 'gameover';
@@ -467,7 +448,6 @@ class ObjectHuntGame {
     }
   }
 
-  // ========== PLAYER ACTIONS ==========
   private handleInteract(): void {
     if (this.phase !== 'playing' && this.phase !== 'hiding') return;
     if (this.localRole === 'spectator') return;
@@ -488,23 +468,61 @@ class ObjectHuntGame {
     this.weaponSwing = 1.0;
     this.audio.play('hit_wood');
 
-    // Raycast to find object
     const intersections = this.sceneManager.raycastFromCamera(4);
     if (intersections.length > 0) {
       const hit = intersections[0];
-      const object = hit.object;
-
-      // Find the transformable object
-      let current = object;
+      let current: any = hit.object;
       while (current) {
         if (current.userData?.transformable) {
           const objectId = current.userData.name || current.uuid;
           this.performHit(objectId);
           break;
         }
-        current = current.parent!;
+        current = current.parent;
       }
     }
+  }
+
+  private handleReplicate(): void {
+    if (this.phase !== 'playing' && this.phase !== 'hiding') return;
+    if (this.localRole !== 'hider') return;
+    if (!this.isTransformed) return;
+    if (this.replicaLimit > 0 && this.replicaCount >= this.replicaLimit) {
+      this.ui.showMessage('Replica limit reached!', '#FF9800');
+      return;
+    }
+
+    const pos = this.playerController.position;
+    const color = this.transformedObjectId ? 0xCC8833 : 0x888888;
+    const scale = 0.3 + Math.random() * 0.3;
+
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(scale, scale * 0.8, scale),
+      new THREE.MeshStandardMaterial({ color })
+    );
+    mesh.position.set(pos.x, pos.y + 0.2, pos.z + 1);
+    mesh.castShadow = true;
+    this.sceneManager.scene.add(mesh);
+
+    this.replicas.push({ mesh, timer: this.replicaDuration });
+    this.replicaCount++;
+    this.ui.updateReplicaCount(this.replicaCount, this.replicaLimit);
+    this.ui.showMessage('Replica created!', '#8BC34A');
+
+    this.network.sendGameEvent({
+      type: 'replicate',
+      payload: {
+        hiderId: this.localId,
+        x: mesh.position.x,
+        y: mesh.position.y,
+        z: mesh.position.z,
+        scale,
+        color,
+        duration: this.replicaDuration
+      },
+      timestamp: Date.now(),
+      senderId: this.localId
+    });
   }
 
   private transform(): void {
@@ -513,16 +531,14 @@ class ObjectHuntGame {
     const intersections = this.sceneManager.raycastFromCamera(4);
     if (intersections.length > 0) {
       const hit = intersections[0];
-      const object = hit.object;
-
-      let current = object;
+      let current: any = hit.object;
       while (current) {
         if (current.userData?.transformable) {
           const objectId = current.userData.name || current.uuid;
           this.performTransform(objectId);
           break;
         }
-        current = current.parent!;
+        current = current.parent;
       }
     }
   }
@@ -532,7 +548,6 @@ class ObjectHuntGame {
     if (success) {
       this.isTransformed = true;
       this.transformedObjectId = objectId;
-      this.objectTimer = this.objectTimerMax;
       this.playerController.setDisguised(true, objectId);
 
       this.network.sendGameEvent({
@@ -555,7 +570,6 @@ class ObjectHuntGame {
     if (success) {
       this.isTransformed = false;
       this.transformedObjectId = '';
-      this.objectTimer = 0;
       this.playerController.setDisguised(false);
 
       this.network.sendGameEvent({
@@ -573,7 +587,6 @@ class ObjectHuntGame {
   private forceUntransform(): void {
     this.isTransformed = false;
     this.transformedObjectId = '';
-    this.objectTimer = 0;
     this.playerController.setDisguised(false);
     this.ui.showTransformButton(true, false);
   }
@@ -597,7 +610,6 @@ class ObjectHuntGame {
     }
   }
 
-  // ========== GAME LOOP ==========
   private animate = (): void => {
     if (!this.isRunning) return;
 
@@ -610,53 +622,70 @@ class ObjectHuntGame {
       return;
     }
 
-    // Update game state timers
+    // Show role card once at game start
+    if (!this.roleCardShown && (this.phase === 'hiding' || this.phase === 'playing')) {
+      this.roleCardShown = true;
+      this.ui.showRoleCard(this.localRole);
+    }
+
+    // Phase timer from GameStateManager
     if (this.phase === 'hiding' || this.phase === 'playing') {
       this.gameState.updateTimer(dt);
+      this.ui.updatePhaseTimer(this.gameState.getPhaseTimer());
 
-      // Update local timers
-      if (this.isTransformed && this.objectTimer > 0) {
-        this.objectTimer -= dt;
-        if (this.objectTimer <= 0) {
-          this.forceUntransform();
-          this.ui.showMessage('Disguise expired!', '#FF9800');
-          this.audio.play('timer_warning');
+      // Object disguise timer
+      if (this.isTransformed && this.objectTimerMax > 0) {
+        const player = this.gameState.getLocalPlayer();
+        const objTimer = player ? player.objectTimer : 0;
+        if (objTimer > 0) {
+          this.gameState.updatePlayerState(this.localId, { objectTimer: objTimer - dt });
+          if (objTimer - dt <= 0) {
+            this.forceUntransform();
+            this.ui.showMessage('Disguise expired!', '#FF9800');
+            this.audio.play('timer_warning');
+          }
+          this.ui.updateObjectTimer(Math.max(0, objTimer - dt), this.objectTimerMax);
+        } else {
+          this.ui.updateObjectTimer(0, this.objectTimerMax);
         }
-        this.ui.updateObjectTimer(this.objectTimer, this.objectTimerMax);
       } else {
         this.ui.updateObjectTimer(0, this.objectTimerMax);
       }
-
-      this.ui.updatePhaseTimer(this.gameState.getPhaseTimer());
     }
 
-    // Update player
+    // Seeker frozen during hiding
+    if (this.localRole === 'seeker' && this.phase === 'hiding') {
+      this.sceneManager.render();
+      return;
+    }
+
+    // Update replica timers
+    this.updateReplicas(dt);
+
     this.playerController.update(dt);
-
-    // Update remote players
     this.remotePlayers.forEach(rp => rp.update(dt));
-
-    // Update interaction highlights
     this.updateInteraction();
-
-    // Update HUD
     this.ui.updateHealth(this.playerHealth);
 
-    // Weapon animation
-    if (this.weaponMesh) {
-      if (this.weaponSwing > 0) {
-        this.weaponSwing -= dt * 4;
-        this.weaponMesh.rotation.x = -this.weaponSwing * 1.2;
-        this.weaponMesh.rotation.z = 0.3 + this.weaponSwing * 0.5;
-      }
-    }
+    this.weaponSwing = Math.max(0, this.weaponSwing - dt * 4);
 
-    // Sync position
     this.syncPosition();
-
-    // Render
     this.sceneManager.render();
   };
+
+  private updateReplicas(dt: number): void {
+    for (let i = this.replicas.length - 1; i >= 0; i--) {
+      this.replicas[i].timer -= dt;
+      if (this.replicas[i].timer <= 0) {
+        this.sceneManager.scene.remove(this.replicas[i].mesh);
+        this.replicas.splice(i, 1);
+        this.replicaCount--;
+      }
+    }
+    if (this.replicas.length > 0) {
+      this.ui.updateReplicaCount(this.replicaCount, this.replicaLimit);
+    }
+  }
 
   private updateInteraction(): void {
     if (this.localRole === 'spectator') return;
@@ -666,13 +695,13 @@ class ObjectHuntGame {
 
     if (intersections.length > 0) {
       const hit = intersections[0];
-      let current = hit.object;
+      let current: any = hit.object;
       while (current) {
         if (current.userData?.transformable) {
           highlight = current.userData.name || current.uuid;
           break;
         }
-        current = current.parent!;
+        current = current.parent;
       }
     }
 
@@ -680,21 +709,29 @@ class ObjectHuntGame {
       this.highlightedObjectId = highlight;
     }
 
-    // Update prompt
     if (this.highlightedObjectId) {
       if (this.localRole === 'hider') {
-        this.ui.updateInteractPrompt(`📦 ${this.highlightedObjectId} — Press E to Transform`, true);
+        const replicaHint = this.replicaLimit > 0 ? ' | R to Replicate' : '';
+        this.ui.updateInteractPrompt(`Press E to Transform${replicaHint}`, true);
         this.ui.showTransformButton(true, this.isTransformed);
       } else if (this.localRole === 'seeker') {
-        this.ui.updateInteractPrompt(`🪓 ${this.highlightedObjectId} — Click to Attack`, true);
+        this.ui.updateInteractPrompt(`Click to Attack`, true);
       }
     } else if (this.isTransformed) {
-      this.ui.updateInteractPrompt('Press E to Un-transform', true);
+      this.ui.updateInteractPrompt('Press E to Un-transform | R to Replicate', true);
       this.ui.showTransformButton(true, true);
     } else {
       this.ui.updateInteractPrompt('', false);
       this.ui.showTransformButton(false, false);
     }
+  }
+
+  private cleanupReplicas(): void {
+    for (const r of this.replicas) {
+      this.sceneManager.scene.remove(r.mesh);
+    }
+    this.replicas = [];
+    this.replicaCount = 0;
   }
 
   private syncPosition(): void {
@@ -711,14 +748,14 @@ class ObjectHuntGame {
       rotation: state.rotation,
       health: this.playerHealth,
       isTransformed: this.isTransformed,
-      objectTimer: this.objectTimer,
+      objectTimer: 0,
       isAlive: this.playerHealth > 0,
-      isHost: this.network.isHostPlayer()
+      isHost: this.network.isHostPlayer(),
+      replicaCount: this.replicaCount
     });
   }
 }
 
-// ========== INITIALIZE ==========
 window.addEventListener('DOMContentLoaded', async () => {
   const game = new ObjectHuntGame();
   await game.init();

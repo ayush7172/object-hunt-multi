@@ -376,27 +376,34 @@ export class NetworkManager {
   async startGame(settings: RoomSettings): Promise<void> {
     if (!this.isHost || !this.db) return;
 
-    // Update room state to start the game
     const roomRef = doc(this.db, 'rooms', this.roomId);
-    
-    // Assign roles - 1 seeker per 4 players (minimum 1)
+
     const roomSnap = await getDoc(roomRef);
     const roomState = roomSnap.data() as RoomState;
     const playerIds = Object.keys(roomState.players);
     const numSeekers = Math.max(1, Math.floor(playerIds.length / 4));
     const shuffled = [...playerIds].sort(() => Math.random() - 0.5);
-    
+
     const updates: Record<string, any> = {
       phase: 'hiding',
       phaseTimer: settings.hidingTime,
       gameTimer: settings.seekingTime,
-      settings: settings,
+      'settings.mapId': settings.mapId,
+      'settings.maxPlayers': settings.maxPlayers,
+      'settings.hideMode': settings.hideMode,
+      'settings.hidingTime': settings.hidingTime,
+      'settings.seekingTime': settings.seekingTime,
+      'settings.objectTime': settings.objectTime,
+      'settings.replicaLimit': settings.replicaLimit || 0,
+      'settings.replicaDuration': settings.replicaDuration || 10,
+      'settings.difficulty': settings.difficulty || 'normal',
     };
 
     playerIds.forEach((id, index) => {
       updates[`players.${id}.role`] = index < numSeekers ? 'seeker' : 'hider';
       updates[`players.${id}.isAlive`] = true;
       updates[`players.${id}.health`] = 100;
+      updates[`players.${id}.replicaCount`] = 0;
     });
 
     await updateDoc(roomRef, updates);

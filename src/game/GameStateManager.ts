@@ -36,6 +36,8 @@ export class GameStateManager {
     hidingTime: 20,
     seekingTime: 180,
     objectTime: 15,
+    replicaLimit: 3,
+    replicaDuration: 10,
     difficulty: 'normal'
   };
 

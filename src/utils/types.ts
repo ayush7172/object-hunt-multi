@@ -1,5 +1,3 @@
-// Core game types
-
 export type GameMode = 'hide' | 'seek';
 export type GamePhase = 'lobby' | 'hiding' | 'playing' | 'gameover';
 export type PlayerRole = 'hider' | 'seeker' | 'spectator';
@@ -22,6 +20,7 @@ export interface PlayerState {
   objectTimer: number;
   isAlive: boolean;
   isHost: boolean;
+  replicaCount?: number;
 }
 
 export interface RoomSettings {
@@ -31,6 +30,8 @@ export interface RoomSettings {
   hidingTime: number;
   seekingTime: number;
   objectTime: number;
+  replicaLimit: number;
+  replicaDuration: number;
   difficulty: 'easy' | 'normal' | 'hard';
 }
 
@@ -60,7 +61,7 @@ export interface TransformableObject {
 }
 
 export interface GameEvent {
-  type: 'transform' | 'untransform' | 'hit' | 'destroy' | 'roleAssign' | 'phaseChange' | 'timerSync' | 'playerJoin' | 'playerLeave' | 'playerDeath';
+  type: 'transform' | 'untransform' | 'hit' | 'destroy' | 'roleAssign' | 'phaseChange' | 'timerSync' | 'playerJoin' | 'playerLeave' | 'playerDeath' | 'replicate' | 'replicaDespawn';
   payload: any;
   timestamp: number;
   senderId: string;
@@ -76,7 +77,7 @@ export interface MapConfig {
     hider: Vector3D[];
     seeker: Vector3D[];
   };
-  transformableObjects: TransformableObject[];
+  objectPositions: Vector3D[];
   modelPath: string;
   collisionPath?: string;
 }
@@ -90,9 +91,9 @@ export interface InputState {
   interact: boolean;
   attack: boolean;
   toggleView: boolean;
+  replicate: boolean;
 }
 
-// Network messages
 export type NetworkMessage =
   | { type: 'offer'; payload: RTCSessionDescriptionInit; targetId: string }
   | { type: 'answer'; payload: RTCSessionDescriptionInit; targetId: string }
@@ -116,5 +117,7 @@ export const DEFAULT_ROOM_SETTINGS: RoomSettings = {
   hidingTime: 20,
   seekingTime: 180,
   objectTime: 15,
+  replicaLimit: 3,
+  replicaDuration: 10,
   difficulty: 'normal'
 };

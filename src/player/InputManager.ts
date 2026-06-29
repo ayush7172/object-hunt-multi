@@ -3,11 +3,8 @@ import { InputState } from '../utils/types';
 export class InputManager {
   private keys: Set<string> = new Set();
   private mouseLocked = false;
-
-  // Separate joystick center (pixels) from direction (-1..1)
   private joystickCenter = { x: 0, y: 0 };
   private joystickDir = { x: 0, y: 0, activeTouchId: -1, active: false };
-
   private touchLook = { active: false, lastX: 0, lastY: 0, lastTouchId: -1, deltaX: 0, deltaY: 0 };
 
   onPointerLockChange?: (locked: boolean) => void;
@@ -16,6 +13,7 @@ export class InputManager {
   onJump?: () => void;
   onToggleView?: () => void;
   onPause?: () => void;
+  onReplicate?: () => void;
   onTouchLook?: (dx: number, dy: number) => void;
 
   constructor(private canvas: HTMLCanvasElement, private isMobile: boolean) {
@@ -31,6 +29,7 @@ export class InputManager {
       if (e.code === 'Space') this.onJump?.();
       if (e.code === 'KeyV') this.onToggleView?.();
       if (e.code === 'Escape') this.onPause?.();
+      if (e.code === 'KeyR') this.onReplicate?.();
     });
 
     window.addEventListener('keyup', (e) => {
@@ -105,10 +104,9 @@ export class InputManager {
     document.addEventListener('touchend', resetJoystick);
     document.addEventListener('touchcancel', resetJoystick);
 
-    // Look area (right side of screen)
     this.canvas.addEventListener('touchstart', (e) => {
       const touch = e.changedTouches[0];
-      if (touch.clientX > window.innerWidth * 0.3) {
+      if (touch.clientX > window.innerWidth * 0.5) {
         this.touchLook.active = true;
         this.touchLook.lastTouchId = touch.identifier;
         this.touchLook.lastX = touch.clientX;
@@ -155,6 +153,7 @@ export class InputManager {
     setupBtn('btn-jump', () => this.onJump?.());
     setupBtn('btn-interact', () => this.onInteract?.());
     setupBtn('btn-pause', () => this.onPause?.());
+    setupBtn('btn-replicate', () => this.onReplicate?.());
   }
 
   getInputState(): InputState {
@@ -166,7 +165,8 @@ export class InputManager {
       jump: this.keys.has('Space'),
       interact: this.keys.has('KeyE'),
       attack: false,
-      toggleView: this.keys.has('KeyV')
+      toggleView: this.keys.has('KeyV'),
+      replicate: this.keys.has('KeyR')
     };
   }
 

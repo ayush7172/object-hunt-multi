@@ -1,14 +1,9 @@
-// UI Manager - handles all screens: menu, lobby, HUD, game over
-
 import { GamePhase, PlayerState, RoomSettings, PlayerRole } from '../utils/types';
 
 export class UIManager {
   private isMobile = false;
-
-  // Cached elements
   private elements: Map<string, HTMLElement> = new Map();
 
-  // Callbacks
   onCreateRoom?: (settings: RoomSettings) => void;
   onJoinRoom?: (code: string) => void;
   onStartGame?: () => void;
@@ -18,6 +13,7 @@ export class UIManager {
   onRestart?: () => void;
   onMainMenu?: () => void;
   onReady?: () => void;
+  onReplicate?: () => void;
 
   constructor() {
     this.isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
@@ -28,8 +24,8 @@ export class UIManager {
   private cacheElements(): void {
     const ids = [
       'loading', 'main-menu', 'lobby', 'hud', 'mobile-controls',
-      'game-over', 'settings-panel', 'create-room-panel', 'join-room-panel',
-      'hud-mode', 'hud-timer', 'hud-phase-timer', 'health-fill', 'health-text',
+      'game-over', 'create-room-panel', 'join-room-panel',
+      'hud-mode', 'hud-timer', 'health-fill', 'health-text',
       'obj-timer-fill', 'obj-timer-text', 'obj-timer-row',
       'weapon-indicator', 'crosshair', 'interact-prompt', 'message-popup',
       'hiding-phase-overlay', 'hiding-phase-text',
@@ -37,10 +33,12 @@ export class UIManager {
       'player-list', 'room-code-display', 'player-count',
       'settings-map', 'settings-players', 'settings-hidemode',
       'settings-hiding', 'settings-seeking', 'settings-object',
+      'settings-replica-limit', 'settings-replica-duration',
       'joystick-area', 'joystick-thumb', 'joystick-base',
       'btn-attack', 'btn-jump', 'btn-interact', 'btn-pause',
-      'btn-transform', 'btn-untransform', 'btn-spectate',
-      'room-code-input'
+      'btn-transform', 'btn-untransform', 'btn-spectate', 'btn-replicate',
+      'room-code-input', 'hud-replica-count', 'role-card',
+      'seeker-waiting'
     ];
     ids.forEach(id => {
       const el = document.getElementById(id);
@@ -52,7 +50,6 @@ export class UIManager {
     return this.elements.get(id) || null;
   }
 
-  // Screen transitions
   showLoading(): void {
     this.hideAll();
     const el = this.get('loading');
@@ -91,7 +88,6 @@ export class UIManager {
     const startBtn = document.getElementById('btn-start-game');
     if (startBtn) startBtn.style.display = isHost ? 'block' : 'none';
 
-    // Only attach listeners once
     if (!this._lobbyListenersAttached) {
       this._lobbyListenersAttached = true;
       this.attachLobbyListeners();
@@ -107,9 +103,7 @@ export class UIManager {
     const codeEl = document.getElementById('room-code-display');
 
     if (startBtn) {
-      startBtn.onclick = () => {
-        this.onStartGame?.();
-      };
+      startBtn.onclick = () => this.onStartGame?.();
     }
 
     if (leaveBtn) {
@@ -120,9 +114,7 @@ export class UIManager {
     }
 
     if (readyBtn) {
-      readyBtn.onclick = () => {
-        this.onReady?.();
-      };
+      readyBtn.onclick = () => this.onReady?.();
     }
 
     if (codeEl) {
@@ -146,6 +138,24 @@ export class UIManager {
     }
   }
 
+  showRoleCard(role: PlayerRole): void {
+    const card = this.get('role-card');
+    if (!card) return;
+    card.style.display = 'flex';
+    const title = card.querySelector('.role-card-title') as HTMLElement | null;
+    const subtitle = card.querySelector('.role-card-subtitle') as HTMLElement | null;
+    if (title) {
+      title.textContent = role === 'hider' ? 'YOU ARE A HIDER' : 'YOU ARE A SEEKER';
+      title.style.color = role === 'hider' ? '#2196F3' : '#f44336';
+    }
+    if (subtitle) {
+      subtitle.textContent = role === 'hider'
+        ? 'Disguise yourself as an object!'
+        : 'Find and eliminate all hiders!';
+    }
+    setTimeout(() => { card.style.display = 'none'; }, 3000);
+  }
+
   showGameOver(winner: 'hiders' | 'seekers', localRole: PlayerRole, localIsAlive: boolean): void {
     const el = this.get('game-over');
     if (el) el.style.display = 'flex';
@@ -157,7 +167,7 @@ export class UIManager {
     const playerWon = (winner === 'hiders' && localRole === 'hider') ||
                       (winner === 'seekers' && localRole === 'seeker');
 
-    if (icon) icon.textContent = playerWon ? '🏆' : '💀';
+    if (icon) icon.textContent = playerWon ? '\uD83C\uDFC6' : '\uD83D\uDC80';
     if (title) {
       title.textContent = playerWon ? 'YOU WIN!' : 'YOU LOSE!';
       title.style.color = playerWon ? '#4CAF50' : '#f44336';
@@ -183,7 +193,6 @@ export class UIManager {
     });
   }
 
-  // HUD updates
   updateHUDMode(mode: 'hide' | 'seek'): void {
     const el = this.get('hud-mode');
     if (el) {
@@ -198,19 +207,22 @@ export class UIManager {
   updatePhase(phase: GamePhase): void {
     const phaseEl = this.get('hiding-phase-overlay');
     const phaseText = this.get('hiding-phase-text');
+    const seekerWait = this.get('seeker-waiting');
 
     if (phase === 'hiding') {
       if (phaseEl) phaseEl.style.display = 'flex';
       if (phaseText) phaseText.textContent = 'HIDING PHASE: ';
+      if (seekerWait) seekerWait.style.display = 'flex';
     } else {
       if (phaseEl) phaseEl.style.display = 'none';
+      if (seekerWait) seekerWait.style.display = 'none';
     }
   }
 
   updatePhaseTimer(timer: number): void {
-    const el = this.get('hud-phase-timer');
     const phaseText = this.get('hiding-phase-text');
     const timerEl = this.get('hud-timer');
+    const seekerWait = this.get('seeker-waiting');
 
     const mins = Math.floor(timer / 60);
     const secs = Math.floor(timer % 60);
@@ -218,6 +230,9 @@ export class UIManager {
 
     if (phaseText && phaseText.textContent?.includes('HIDING')) {
       phaseText.textContent = `HIDING PHASE: ${Math.ceil(timer)}`;
+      if (seekerWait) {
+        seekerWait.textContent = `Hiders are hiding... ${Math.ceil(timer)}s`;
+      }
     } else if (timerEl) {
       timerEl.textContent = str;
       timerEl.style.color = timer < 30 ? '#f44336' : '#FF9800';
@@ -256,6 +271,14 @@ export class UIManager {
     }
   }
 
+  updateReplicaCount(current: number, max: number): void {
+    const el = this.get('hud-replica-count');
+    if (el) {
+      el.textContent = `Copies: ${current}/${max}`;
+      el.style.display = 'flex';
+    }
+  }
+
   updateInteractPrompt(text: string, visible: boolean): void {
     const el = this.get('interact-prompt');
     if (el) {
@@ -272,7 +295,6 @@ export class UIManager {
     el.style.color = color;
     el.style.display = 'block';
     el.style.animation = 'none';
-    // Force reflow
     void (el as HTMLElement).offsetHeight;
     el.style.animation = 'popIn 0.5s ease';
 
@@ -296,7 +318,6 @@ export class UIManager {
     if (btn) btn.style.display = show ? 'flex' : 'none';
   }
 
-  // Player list
   private updatePlayerList(players: PlayerState[]): void {
     const list = this.get('player-list');
     if (!list) return;
@@ -304,48 +325,44 @@ export class UIManager {
     list.innerHTML = '';
     players.forEach(p => {
       const li = document.createElement('li');
-      li.style.cssText = `
-        display: flex; align-items: center; gap: 8px;
-        padding: 8px 12px; margin: 4px 0;
-        background: ${p.isHost ? 'rgba(255,152,0,0.15)' : 'rgba(255,255,255,0.05)'};
-        border-radius: 6px; border: 1px solid ${p.isHost ? 'rgba(255,152,0,0.3)' : 'transparent'};
-        font-size: 0.9em;
-      `;
+      const bg = p.isHost ? 'rgba(255,152,0,0.15)' : 'rgba(255,255,255,0.05)';
+      const border = p.isHost ? 'rgba(255,152,0,0.3)' : 'transparent';
+      li.style.cssText = `display:flex;align-items:center;gap:8px;padding:8px 12px;margin:4px 0;background:${bg};border-radius:6px;border:1px solid ${border};font-size:0.9em;`;
+
       const dot = document.createElement('span');
-      dot.style.cssText = `
-        width: 8px; height: 8px; border-radius: 50%;
-        background: ${p.isAlive ? '#4CAF50' : '#f44336'};
-      `;
+      dot.style.cssText = `width:8px;height:8px;border-radius:50%;background:${p.isAlive ? '#4CAF50' : '#f44336'};flex-shrink:0;`;
+
       const name = document.createElement('span');
-      name.textContent = p.name;
+      name.textContent = p.name + (p.role === 'seeker' ? ' \uD83D\uDD2D' : '');
       name.style.flex = '1';
-      const hostBadge = document.createElement('span');
-      if (p.isHost) {
-        hostBadge.textContent = '👑 HOST';
-        hostBadge.style.cssText = 'color: #FF9800; font-size: 0.8em; font-weight: 700;';
+
+      const badge = document.createElement('span');
+      let badgeText = '';
+      if (p.isHost) badgeText = '\uD83D\uDC51 HOST';
+      else if (p.role === 'seeker') badgeText = '\uD83D\uDD2D SEEKER';
+      else if (p.role === 'hider') badgeText = '\uD83D\uDCE6 HIDER';
+      badge.textContent = badgeText;
+      if (badgeText) {
+        badge.style.cssText = `color:${p.role === 'seeker' ? '#f44336' : '#FF9800'};font-size:0.8em;font-weight:700;`;
       }
+
       li.appendChild(dot);
       li.appendChild(name);
-      li.appendChild(hostBadge);
+      li.appendChild(badge);
       list.appendChild(li);
     });
   }
 
-  // Menu listeners
   private setupMenuListeners(): void {
     const createBtn = document.getElementById('btn-create-room');
     const joinBtn = document.getElementById('btn-join-room');
 
     if (createBtn) {
-      createBtn.onclick = () => {
-        this.showCreateRoomPanel();
-      };
+      createBtn.onclick = () => this.showCreateRoomPanel();
     }
 
     if (joinBtn) {
-      joinBtn.onclick = () => {
-        this.showJoinRoomPanel();
-      };
+      joinBtn.onclick = () => this.showJoinRoomPanel();
     }
   }
 
@@ -395,11 +412,12 @@ export class UIManager {
       hidingTime: parseInt(getVal('settings-hiding') || '20'),
       seekingTime: parseInt(getVal('settings-seeking') || '180'),
       objectTime: parseInt(getVal('settings-object') || '15'),
+      replicaLimit: parseInt(getVal('settings-replica-limit') || '3'),
+      replicaDuration: parseInt(getVal('settings-replica-duration') || '10'),
       difficulty: 'normal'
     };
   }
 
-  // Mobile controls visibility
   showMobileControls(show: boolean): void {
     const el = this.get('mobile-controls');
     if (el) el.style.display = show ? 'block' : 'none';
